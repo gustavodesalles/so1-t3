@@ -1,8 +1,29 @@
 #include "fs.h"
+#include "cmath"
 
 int INE5412_FS::fs_format()
 {
-	return 0;
+    fs_block newblock;
+
+    // Reservar dez por cento para inodes, arr. para cima
+    int tamanho_blocos_inodes = (int) ceil(disk->size() * 0.1);
+
+    // Liberar tabela de inodes (blocos depois de 0)
+    for (int i = 1; i < tamanho_blocos_inodes; ++i) {
+        for (int j = 0; j < INODES_PER_BLOCK; ++j) {
+            newblock.inode[j].isvalid = 0; // nenhum dos inodes foi "criado" no disco formatado
+        }
+        disk->write(i, newblock.data); // não tenho certeza
+    }
+
+    //Preencher o superbloco
+    newblock.super.magic = FS_MAGIC;
+    newblock.super.ninodeblocks = tamanho_blocos_inodes;
+    newblock.super.ninodes = tamanho_blocos_inodes * INODES_PER_BLOCK;
+    newblock.super.nblocks = disk->size();
+
+    disk->write(0, newblock.data);
+    return 1;
 }
 
 void INE5412_FS::fs_debug()
