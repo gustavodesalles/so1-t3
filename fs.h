@@ -47,6 +47,7 @@ public:
 
     int  fs_create();
     int  fs_delete(int inumber);
+    tuple<INE5412_FS::fs_block, INE5412_FS::fs_inode, int> fs_getblock_and_inode(int inumber);
     int  fs_getsize(int inumber);
 
     int  fs_read(int inumber, char *data, int length, int offset);
@@ -55,6 +56,7 @@ public:
 private:
     Disk *disk;
     bool is_disk_mounted = false;
+    int numinodes;
     void construct_bitmap(Disk *disk);
 };
 
