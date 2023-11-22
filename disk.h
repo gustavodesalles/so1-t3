@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdio.h>
+#include <vector>
 
 using namespace std;
 
@@ -12,6 +13,7 @@ class Disk
 public:
     static const unsigned short int DISK_BLOCK_SIZE = 4096;
     static const unsigned int DISK_MAGIC = 0xdeadbeef;
+    std::vector<bool> bitmap;
 
     Disk(const char *filename, int nblocks);
 
@@ -29,6 +31,5 @@ private:
     int nreads;
     int nwrites;
 };
-
 
 #endif

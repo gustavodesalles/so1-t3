@@ -54,6 +54,8 @@ public:
 
 private:
     Disk *disk;
+    bool is_disk_mounted = false;
+    void construct_bitmap(Disk *disk);
 };
 
 #endif
