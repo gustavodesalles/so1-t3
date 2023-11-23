@@ -313,15 +313,16 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 
     int actual_length = min(length, Disk::DISK_BLOCK_SIZE * (POINTERS_PER_INODE + POINTERS_PER_BLOCK) - offset);
     int total_written = 0;
-    cout << actual_length << endl;
+//    cout << actual_length << endl;
     while (total_written < actual_length) {
         int blocknumber = offset / Disk::DISK_BLOCK_SIZE;
+//        cout << blocknumber << endl;
         int blockposition = offset % Disk::DISK_BLOCK_SIZE;
 
         if (blocknumber < POINTERS_PER_INODE && inode.direct[blocknumber] == 0) { // if direct is empty
             int newblocknumber = allocate_new_block();
             if (!newblocknumber) {
-                cout << total_written << endl;
+//                cout << total_written << endl;
                 return total_written;
             } else {
                 inode.direct[blocknumber] = newblocknumber;
@@ -329,7 +330,7 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
         } else if (blocknumber >= POINTERS_PER_INODE && inode.indirect == 0) {
             int newblocknumber = allocate_new_block();
             if (!newblocknumber) {
-                cout << total_written << endl;
+//                cout << total_written << endl;
                 return total_written;
             } else {
                 inode.indirect = newblocknumber;
@@ -358,6 +359,7 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
         if (blocknumber < POINTERS_PER_INODE) { // write on direct block
             disk->write(inode.direct[blocknumber], block_to_write.data);
         } else { // write on indirect block
+            cout << block_to_write.pointers[blocknumber - POINTERS_PER_INODE] << endl;
             disk->write(block_to_write.pointers[blocknumber - POINTERS_PER_INODE], block_to_write.data);
         }
         total_written += bytes_to_copy;
