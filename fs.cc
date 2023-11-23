@@ -13,14 +13,14 @@ int INE5412_FS::fs_format()
 
     // Formatting the superblock
     int disk_size = disk->size();
-    int n_inodes = std::ceil(disk_size * 0.1);
+    int n_inodeblocks = std::ceil(disk_size * 0.1);
 
     union fs_block superblock;
-    superblock.super = {FS_MAGIC, disk_size, n_inodes, INODES_PER_BLOCK * n_inodes};
+    superblock.super = {FS_MAGIC, disk_size, n_inodeblocks, INODES_PER_BLOCK * n_inodeblocks};
     disk->write(0, superblock.data);
 
     // Formatting the inode blocks
-    for (int i = 1; i < n_inodes + 1; i++)
+    for (int i = 1; i < n_inodeblocks + 1; i++)
     {
         union fs_block fs_inodeblock;
         for (int j = 0; j < INODES_PER_BLOCK; j++)
@@ -144,7 +144,7 @@ int INE5412_FS::fs_mount()
 
     // Mark the disk as mounted
     is_disk_mounted = true;
-    numinodes = std::ceil(disk->size() * 0.1);
+    numinodes = std::ceil(disk->size() * 0.1) * INODES_PER_BLOCK;
     return 1;
 }
 
@@ -198,9 +198,13 @@ int INE5412_FS::fs_delete(int inumber)
 
     inode.isvalid = false;
     inode.size = 0;
+
     inode.indirect = 0;
+    disk->bitmap[inode.indirect] = 0;
+
     for (int i = 0; i < POINTERS_PER_INODE; ++i) {
         inode.direct[i] = 0;
+        disk->bitmap[inode.direct[i]] = 0;
     }
 
     block.inode[(inumber - 1) % INODES_PER_BLOCK] = inode;
@@ -250,6 +254,11 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
     auto block_and_inode = fs_getblock_and_inode(inumber);
     auto inode = get<1>(block_and_inode);
 
+    if (!inode.isvalid) {
+        cout << "Inode is not valid." << endl;
+        return 0;
+    }
+
     if (offset < 0 || offset >= inode.size) {
         return 0;
     }
@@ -289,32 +298,74 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
     }
 
     auto block_and_inode = fs_getblock_and_inode(inumber);
+    auto block = get<0>(block_and_inode);
     auto inode = get<1>(block_and_inode);
+    auto inodeblocknumber = get<2>(block_and_inode);
+
+    if (!inode.isvalid) {
+        cout << "Inode is not valid." << endl;
+        return 0;
+    }
 
     if (offset < 0 || offset >= inode.size) {
         return 0;
     }
 
-    int unwritten = min(length, inode.size - offset);
-    int total_written = unwritten;
-    while (unwritten) {
+    int actual_length = min(length, Disk::DISK_BLOCK_SIZE * (POINTERS_PER_INODE + POINTERS_PER_BLOCK) - offset);
+    int total_written = 0;
+    cout << actual_length << endl;
+    while (total_written < actual_length) {
         int blocknumber = offset / Disk::DISK_BLOCK_SIZE;
-        fs_block block_to_write;
-        if (blocknumber < POINTERS_PER_INODE) {
-            disk->read(inode.direct[blocknumber], block_to_write.data);
-        } else {
-            fs_block indirect;
-            disk->read(inode.indirect, indirect.data);
-            disk->read(indirect.pointers[blocknumber - POINTERS_PER_INODE], block_to_write.data);
+        int blockposition = offset % Disk::DISK_BLOCK_SIZE;
+
+        if (blocknumber < POINTERS_PER_INODE && inode.direct[blocknumber] == 0) { // if direct is empty
+            int newblocknumber = allocate_new_block();
+            if (!newblocknumber) {
+                cout << total_written << endl;
+                return total_written;
+            } else {
+                inode.direct[blocknumber] = newblocknumber;
+            }
+        } else if (blocknumber >= POINTERS_PER_INODE && inode.indirect == 0) {
+            int newblocknumber = allocate_new_block();
+            if (!newblocknumber) {
+                cout << total_written << endl;
+                return total_written;
+            } else {
+                inode.indirect = newblocknumber;
+                // initialize indirect block's pointers
+                fs_block indirect;
+                for (int i = 0; i < POINTERS_PER_BLOCK; ++i) {
+                    indirect.pointers[i] = 0;
+                }
+                disk->write(inode.indirect, indirect.data);
+            }
         }
 
-        int bytes_to_copy = min((int) Disk::DISK_BLOCK_SIZE, unwritten);
-        for (int i = 0; i < bytes_to_copy; ++i, --unwritten, ++offset) {
-//            data[total_written - unwritten] = block_to_write.data[i];
-            block_to_write.data[i] = data[total_written - unwritten];
+        fs_block block_to_write;
+        if (blocknumber < POINTERS_PER_INODE) { // read direct block
+            disk->read(inode.direct[blocknumber], block_to_write.data);
+        } else { // read indirect block
+            disk->read(inode.indirect, block_to_write.data);
+            disk->read(block_to_write.pointers[blocknumber - POINTERS_PER_INODE], block_to_write.data);
         }
+
+        int bytes_to_copy = min(Disk::DISK_BLOCK_SIZE - blockposition, actual_length - total_written);
+        for (int i = 0; i < bytes_to_copy; ++i) {
+            block_to_write.data[blockposition + i] = data[total_written + 1];
+        }
+
+        if (blocknumber < POINTERS_PER_INODE) { // write on direct block
+            disk->write(inode.direct[blocknumber], block_to_write.data);
+        } else { // write on indirect block
+            disk->write(block_to_write.pointers[blocknumber - POINTERS_PER_INODE], block_to_write.data);
+        }
+        total_written += bytes_to_copy;
+//        cout << total_written << endl;
     }
 
+    inode.size = max(inode.size, offset + total_written);
+    disk->write(inodeblocknumber, block.data);
     return total_written;
 }
 
@@ -329,3 +380,13 @@ void INE5412_FS::construct_bitmap(Disk *disk)
     disk->bitmap[0] = 1;
 }
 
+int INE5412_FS::allocate_new_block()
+{
+    for (size_t i = 0; i < disk->bitmap.size(); ++i) {
+        if (disk->bitmap[i] == 0) { // return first unoccupied block
+            disk->bitmap[i] = 1;
+            return i;
+        }
+    }
+    return 0; // no blocks available
+}
