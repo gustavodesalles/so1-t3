@@ -51,7 +51,10 @@ public:
 
     int  fs_read(int inumber, char *data, int length, int offset);
     int  fs_write(int inumber, const char *data, int length, int offset);
-
+    int get_indirect_block(const fs_inode &inode, int block_rel);
+    int handle_direct_block(fs_inode &inode, int block_rel);
+    int handle_indirect_block(fs_inode &inode, int block_rel);
+    
 private:
     Disk *disk;
     bool is_disk_mounted = false;

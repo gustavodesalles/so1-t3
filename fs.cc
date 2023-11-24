@@ -2,6 +2,7 @@
 #include "cmath"
 #include "utility"
 #include "tuple"
+#include <string.h>
 
 int INE5412_FS::fs_format()
 {
@@ -241,135 +242,220 @@ int INE5412_FS::fs_getsize(int inumber)
 
 int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 {
-    if (!is_disk_mounted) {
-        cout << "Disk is not mounted." << endl;
+    // Check if the file system is mounted
+    if (!is_disk_mounted)
+    {
+        cout << "ERROR: Disk is not mounted.\n";
         return 0;
     }
 
-    if (inumber < 0 || inumber > numinodes + 1) {
-        cout << "Invalid inode number." << endl;
+    // Calculate the inode block number and the index within the block
+    int blockNumber = 1 + inumber / INODES_PER_BLOCK;
+    int indexInBlock = inumber % INODES_PER_BLOCK;
+
+    // Read the inode block
+    union fs_block block;
+    disk->read(blockNumber, block.data);
+
+    // Get the specific inode from the block
+    fs_inode inode = block.inode[indexInBlock];
+
+    // Check if the inode is valid
+    if (!inode.isvalid)
+    {
+        cout << "ERROR: Invalid inode.\n";
         return 0;
     }
 
-    auto block_and_inode = fs_getblock_and_inode(inumber);
-    auto inode = get<1>(block_and_inode);
-
-    if (!inode.isvalid) {
-        cout << "Inode is not valid." << endl;
-        return 0;
+    // Check if the offset is within the file size
+    if (offset >= inode.size)
+    {
+        return 0; // Offset exceeds file size, nothing to read
     }
 
-    if (offset < 0 || offset >= inode.size) {
-        return 0;
+    // Adjust the length to be read to avoid exceeding the file size
+    if (offset + length > inode.size)
+    {
+        length = inode.size - offset;
     }
 
-    int unread = min(length, inode.size - offset);
-    int total_read = unread;
-    while (unread) {
-        int blocknumber = offset / Disk::DISK_BLOCK_SIZE;
-        fs_block block_to_read;
-        if (blocknumber < POINTERS_PER_INODE) {
-            disk->read(inode.direct[blocknumber], block_to_read.data);
-        } else {
-            fs_block indirect;
-            disk->read(inode.indirect, indirect.data);
-            disk->read(indirect.pointers[blocknumber - POINTERS_PER_INODE], block_to_read.data);
+    int total_read = 0; // Total bytes read
+
+    while (total_read < length)
+    {
+        int block_rel = offset / Disk::DISK_BLOCK_SIZE;
+        int pos_in_block = offset % Disk::DISK_BLOCK_SIZE;
+        int size_to_read = min(Disk::DISK_BLOCK_SIZE - pos_in_block, length - total_read);
+
+        int physical_block;
+
+        if (block_rel < POINTERS_PER_INODE)
+        {
+            // Direct block
+            physical_block = inode.direct[block_rel];
+        }
+        else
+        {
+            // Indirect block
+            physical_block = get_indirect_block(inode, block_rel);
         }
 
-        int bytes_to_copy = min((int) Disk::DISK_BLOCK_SIZE, unread);
-        for (int i = 0; i < bytes_to_copy; ++i, --unread, ++offset) {
-            data[total_read - unread] = block_to_read.data[i];
+        if (physical_block == 0)
+        {
+            break; // No more data to read
         }
+
+        union fs_block data_block;
+        disk->read(physical_block, data_block.data);
+        memcpy(data + total_read, data_block.data + pos_in_block, size_to_read);
+
+        total_read += size_to_read;
+        offset += size_to_read;
     }
 
-	return total_read;
+    return total_read;
 }
+
+int INE5412_FS::get_indirect_block(const fs_inode &inode, int block_rel)
+{
+    if (inode.indirect == 0)
+    {
+        return 0; // Indirect block not allocated, no more data to read
+    }
+
+    union fs_block indirect_block;
+    disk->read(inode.indirect, indirect_block.data);
+    return indirect_block.pointers[block_rel - POINTERS_PER_INODE];
+}
+
 
 int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 {
-    if (!is_disk_mounted) {
-        cout << "Disk is not mounted." << endl;
+    // Check if the file system is mounted
+    if (!is_disk_mounted)
+    {
+        cout << "ERROR: Disk is not mounted.\n";
         return 0;
     }
 
-    if (inumber < 0 || inumber > numinodes + 1) {
-        cout << "Invalid inode number." << endl;
+    // Calculate the inode block number and the index within the block
+    int blockNumber = 1 + inumber / INODES_PER_BLOCK;
+    int indexInBlock = inumber % INODES_PER_BLOCK;
+
+    // Read the inode block
+    union fs_block block;
+    disk->read(blockNumber, block.data);
+
+    // Get the specific inode from the block
+    fs_inode &inode = block.inode[indexInBlock];
+
+    // Check if the inode is valid
+    if (!inode.isvalid)
+    {
+        cout << "ERROR: Invalid inode.\n";
         return 0;
     }
 
-    auto block_and_inode = fs_getblock_and_inode(inumber);
-    auto block = get<0>(block_and_inode);
-    auto inode = get<1>(block_and_inode);
-    auto inodeblocknumber = get<2>(block_and_inode);
-
-    if (!inode.isvalid) {
-        cout << "Inode is not valid." << endl;
-        return 0;
-    }
-
-    if (offset < 0 || offset >= inode.size) {
-        return 0;
-    }
-
-    int actual_length = min(length, Disk::DISK_BLOCK_SIZE * (POINTERS_PER_INODE + POINTERS_PER_BLOCK) - offset);
     int total_written = 0;
-//    cout << actual_length << endl;
-    while (total_written < actual_length) {
-        int blocknumber = offset / Disk::DISK_BLOCK_SIZE;
-//        cout << blocknumber << endl;
-        int blockposition = offset % Disk::DISK_BLOCK_SIZE;
 
-        if (blocknumber < POINTERS_PER_INODE && inode.direct[blocknumber] == 0) { // if direct is empty
-            int newblocknumber = allocate_new_block();
-            if (!newblocknumber) {
-//                cout << total_written << endl;
-                return total_written;
-            } else {
-                inode.direct[blocknumber] = newblocknumber;
-            }
-        } else if (blocknumber >= POINTERS_PER_INODE && inode.indirect == 0) {
-            int newblocknumber = allocate_new_block();
-            if (!newblocknumber) {
-//                cout << total_written << endl;
-                return total_written;
-            } else {
-                inode.indirect = newblocknumber;
-                // initialize indirect block's pointers
-                fs_block indirect;
-                for (int i = 0; i < POINTERS_PER_BLOCK; ++i) {
-                    indirect.pointers[i] = 0;
-                }
-                disk->write(inode.indirect, indirect.data);
-            }
+    while (total_written < length)
+    {
+        // Calculate the relative block, position in the block, and size to write
+        int block_rel = (offset + total_written) / Disk::DISK_BLOCK_SIZE;
+        int pos_in_block = (offset + total_written) % Disk::DISK_BLOCK_SIZE;
+        int size_to_write = min(Disk::DISK_BLOCK_SIZE - pos_in_block, length - total_written);
+
+        // Get the physical block based on the relative block
+        int physical_block;
+        if (block_rel < POINTERS_PER_INODE)
+        {
+            // Direct block
+            physical_block = handle_direct_block(inode, block_rel);
+        }
+        else
+        {
+            // Indirect block
+            physical_block = handle_indirect_block(inode, block_rel);
         }
 
-        fs_block block_to_write;
-        if (blocknumber < POINTERS_PER_INODE) { // read direct block
-            disk->read(inode.direct[blocknumber], block_to_write.data);
-        } else { // read indirect block
-            disk->read(inode.indirect, block_to_write.data);
-            disk->read(block_to_write.pointers[blocknumber - POINTERS_PER_INODE], block_to_write.data);
-        }
+        // Read the data block, write the data, and update the disk
+        union fs_block data_block;
+        disk->read(physical_block, data_block.data);
+        memcpy(data_block.data + pos_in_block, data + total_written, size_to_write);
+        disk->write(physical_block, data_block.data);
 
-        int bytes_to_copy = min(Disk::DISK_BLOCK_SIZE - blockposition, actual_length - total_written);
-        for (int i = 0; i < bytes_to_copy; ++i) {
-            block_to_write.data[blockposition + i] = data[total_written + 1];
-        }
-
-        if (blocknumber < POINTERS_PER_INODE) { // write on direct block
-            disk->write(inode.direct[blocknumber], block_to_write.data);
-        } else { // write on indirect block
-            cout << block_to_write.pointers[blocknumber - POINTERS_PER_INODE] << endl;
-            disk->write(block_to_write.pointers[blocknumber - POINTERS_PER_INODE], block_to_write.data);
-        }
-        total_written += bytes_to_copy;
-//        cout << total_written << endl;
+        total_written += size_to_write;
     }
 
-    inode.size = max(inode.size, offset + total_written);
-    disk->write(inodeblocknumber, block.data);
+    // Update the inode size if necessary
+    if (inode.size < offset + total_written)
+    {
+        inode.size = offset + total_written;
+        disk->write(blockNumber, block.data);
+    }
+
     return total_written;
 }
+
+int INE5412_FS::handle_direct_block(fs_inode &inode, int block_rel)
+{
+    int physical_block = inode.direct[block_rel];
+
+    if (physical_block == 0)
+    {
+        // Allocate a new block if necessary
+        physical_block = allocate_new_block();
+        if (physical_block == 0)
+        {
+            // Disk is full
+            return 0;
+        }
+
+        inode.direct[block_rel] = physical_block;
+    }
+
+    return physical_block;
+}
+
+int INE5412_FS::handle_indirect_block(fs_inode &inode, int block_rel)
+{
+    if (inode.indirect == 0)
+    {
+        inode.indirect = allocate_new_block();
+        if (inode.indirect == 0)
+        {
+            // Disk is full
+            return 0;
+        }
+
+        // Initialize all pointers to 0
+        union fs_block indirect_block;
+        memset(indirect_block.pointers, 0, sizeof(indirect_block.pointers));
+        disk->write(inode.indirect, indirect_block.data);
+    }
+
+    // Read the indirect block and get the physical block
+    union fs_block indirect_block;
+    disk->read(inode.indirect, indirect_block.data);
+    int physical_block = indirect_block.pointers[block_rel - POINTERS_PER_INODE];
+
+    if (physical_block == 0)
+    {
+        // Allocate a new block if necessary
+        physical_block = allocate_new_block();
+        if (physical_block == 0)
+        {
+            // Disk is full
+            return 0;
+        }
+
+        indirect_block.pointers[block_rel - POINTERS_PER_INODE] = physical_block;
+        disk->write(inode.indirect, indirect_block.data);
+    }
+
+    return physical_block;
+}
+
 
 void INE5412_FS::construct_bitmap(Disk *disk)
 {
