@@ -245,25 +245,28 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
     // Check if the file system is mounted
     if (!is_disk_mounted)
     {
-        cout << "Disk is not mounted.\n";
+        cout << "Disk is not mounted." << endl;
         return 0;
     }
 
-    // Calculate the inode block number and the index within the block
-    int blockNumber = 1 + inumber / INODES_PER_BLOCK;
-    int indexInBlock = inumber % INODES_PER_BLOCK;
-
-    // Read the inode block
-    union fs_block block;
-    disk->read(blockNumber, block.data);
+//    // Calculate the inode block number and the index within the block
+//    int blockNumber = 1 + inumber / INODES_PER_BLOCK;
+//    int indexInBlock = inumber % INODES_PER_BLOCK;
+//
+//    // Read the inode block
+//    union fs_block block;
+//    disk->read(blockNumber, block.data);
 
     // Get the specific inode from the block
-    fs_inode inode = block.inode[indexInBlock];
+    auto block_and_inode = fs_getblock_and_inode(inumber);
+//    auto block = get<0>(block_and_inode);
+    auto inode = get<1>(block_and_inode);
+//    auto blocknumber = get<2>(block_and_inode);
 
     // Check if the inode is valid
     if (!inode.isvalid)
     {
-        cout << "Invalid inode number.\n";
+        cout << "Inode is not valid." << endl;
         return 0;
     }
 
@@ -283,21 +286,21 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 
     while (total_read < length)
     {
-        int block_rel = offset / Disk::DISK_BLOCK_SIZE;
-        int pos_in_block = offset % Disk::DISK_BLOCK_SIZE;
-        int size_to_read = min(Disk::DISK_BLOCK_SIZE - pos_in_block, length - total_read);
+        int relativeblock = offset / Disk::DISK_BLOCK_SIZE;
+        int blockposition = offset % Disk::DISK_BLOCK_SIZE;
+        int size_to_read = min(Disk::DISK_BLOCK_SIZE - blockposition, length - total_read);
 
         int physical_block;
 
-        if (block_rel < POINTERS_PER_INODE)
+        if (relativeblock < POINTERS_PER_INODE)
         {
             // Direct block
-            physical_block = inode.direct[block_rel];
+            physical_block = inode.direct[relativeblock];
         }
         else
         {
             // Indirect block
-            physical_block = get_indirect_block(inode, block_rel);
+            physical_block = get_indirect_block(inode, relativeblock);
         }
 
         if (physical_block == 0)
@@ -307,7 +310,7 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 
         union fs_block data_block;
         disk->read(physical_block, data_block.data);
-        memcpy(data + total_read, data_block.data + pos_in_block, size_to_read);
+        memcpy(data + total_read, data_block.data + blockposition, size_to_read);
 
         total_read += size_to_read;
         offset += size_to_read;
@@ -320,11 +323,11 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 // This method is used when reading data from a file that requires accessing indirect blocks.
 // Parameters:
 //   - inode: Reference to the file system inode containing information about the file.
-//   - block_rel: Relative block index indicating the position of the block within the file.
+//   - relativeblock: Relative block index indicating the position of the block within the file.
 // Returns:
 //   - The physical block number corresponding to the given relative block index.
 //     If the indirect block is not allocated, returns 0, indicating no more data to read.
-int INE5412_FS::get_indirect_block(const fs_inode &inode, int block_rel)
+int INE5412_FS::get_indirect_block(const fs_inode &inode, int relativeblock)
 {
     // Check if an indirect block is allocated for the inode
     if (inode.indirect == 0)
@@ -338,7 +341,7 @@ int INE5412_FS::get_indirect_block(const fs_inode &inode, int block_rel)
     disk->read(inode.indirect, indirect_block.data);
 
     // Return the physical block number from the indirect block corresponding to the given relative block index
-    return indirect_block.pointers[block_rel - POINTERS_PER_INODE];
+    return indirect_block.pointers[relativeblock - POINTERS_PER_INODE];
 }
 
 
@@ -348,7 +351,7 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
     // Check if the file system is mounted
     if (!is_disk_mounted)
     {
-        cout << "Disk is not mounted.\n";
+        cout << "Disk is not mounted." << endl;
         return 0;
     }
 
@@ -359,14 +362,18 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
     // Read the inode block
     union fs_block block;
     disk->read(blockNumber, block.data);
+    fs_inode inode = block.inode[indexInBlock];
 
     // Get the specific inode from the block
-    fs_inode &inode = block.inode[indexInBlock];
+//    auto block_and_inode = fs_getblock_and_inode(inumber);
+//    auto block = get<0>(block_and_inode);
+//    auto inode = get<1>(block_and_inode);
+//    auto blockNumber = get<2>(block_and_inode);
 
     // Check if the inode is valid
     if (!inode.isvalid)
     {
-        cout << "Invalid inode number.\n";
+        cout << "Inode is not valid." << endl;
         return 0;
     }
 
@@ -375,27 +382,27 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
     while (total_written < length)
     {
         // Calculate the relative block, position in the block, and size to write
-        int block_rel = (offset + total_written) / Disk::DISK_BLOCK_SIZE;
-        int pos_in_block = (offset + total_written) % Disk::DISK_BLOCK_SIZE;
-        int size_to_write = min(Disk::DISK_BLOCK_SIZE - pos_in_block, length - total_written);
+        int relativeblock = (offset + total_written) / Disk::DISK_BLOCK_SIZE;
+        int blockposition = (offset + total_written) % Disk::DISK_BLOCK_SIZE;
+        int size_to_write = min(Disk::DISK_BLOCK_SIZE - blockposition, length - total_written);
 
         // Get the physical block based on the relative block
         int physical_block;
-        if (block_rel < POINTERS_PER_INODE)
+        if (relativeblock < POINTERS_PER_INODE)
         {
             // Direct block
-            physical_block = handle_direct_block(inode, block_rel);
+            physical_block = handle_direct_block(inode, relativeblock);
         }
         else
         {
             // Indirect block
-            physical_block = handle_indirect_block(inode, block_rel);
+            physical_block = handle_indirect_block(inode, relativeblock);
         }
 
         // Read the data block, write the data, and update the disk
         union fs_block data_block;
         disk->read(physical_block, data_block.data);
-        memcpy(data_block.data + pos_in_block, data + total_written, size_to_write);
+        memcpy(data_block.data + blockposition, data + total_written, size_to_write);
         disk->write(physical_block, data_block.data);
 
         total_written += size_to_write;
@@ -405,8 +412,8 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
     if (inode.size < offset + total_written)
     {
         inode.size = offset + total_written;
-        disk->write(blockNumber, block.data);
     }
+    disk->write(blockNumber, block.data);
 
     return total_written;
 }
@@ -415,15 +422,15 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 // This method is used when writing data to a file that requires accessing direct blocks.
 // Parameters:
 //   - inode: Reference to the file system inode containing information about the file.
-//   - block_rel: Relative block index indicating the position of the block within the file.
+//   - relativeblock: Relative block index indicating the position of the block within the file.
 // Returns:
 //   - The physical block number corresponding to the given relative block index.
 //     If the block is not allocated, a new block is allocated and its number is returned.
 //     If the disk is full and allocation fails, 0 is returned.
-int INE5412_FS::handle_direct_block(fs_inode &inode, int block_rel)
+int INE5412_FS::handle_direct_block(fs_inode &inode, int relativeblock)
 {
     // Retrieve the current physical block number from the direct block array
-    int physical_block = inode.direct[block_rel];
+    int physical_block = inode.direct[relativeblock];
 
     // Check if the block is not allocated (equals 0)
     if (physical_block == 0)
@@ -439,7 +446,7 @@ int INE5412_FS::handle_direct_block(fs_inode &inode, int block_rel)
         }
 
         // Update the direct block array with the allocated physical block number
-        inode.direct[block_rel] = physical_block;
+        inode.direct[relativeblock] = physical_block;
     }
 
     // Return the physical block number for the given relative block index
@@ -451,12 +458,12 @@ int INE5412_FS::handle_direct_block(fs_inode &inode, int block_rel)
 // This method is used when writing data to a file that requires accessing indirect blocks.
 // Parameters:
 //   - inode: Reference to the file system inode containing information about the file.
-//   - block_rel: Relative block index indicating the position of the block within the file.
+//   - relativeblock: Relative block index indicating the position of the block within the file.
 // Returns:
 //   - The physical block number corresponding to the given relative block index.
 //     If the indirect block is not allocated, a new block is allocated and initialized.
 //     If the disk is full and allocation fails, 0 is returned.
-int INE5412_FS::handle_indirect_block(fs_inode &inode, int block_rel)
+int INE5412_FS::handle_indirect_block(fs_inode &inode, int relativeblock)
 {
     // Check if the indirect block is not allocated (equals 0)
     if (inode.indirect == 0)
@@ -482,7 +489,7 @@ int INE5412_FS::handle_indirect_block(fs_inode &inode, int block_rel)
     disk->read(inode.indirect, indirect_block.data);
 
     // Get the physical block number from the indirect block corresponding to the given relative block index
-    int physical_block = indirect_block.pointers[block_rel - POINTERS_PER_INODE];
+    int physical_block = indirect_block.pointers[relativeblock - POINTERS_PER_INODE];
 
     // Check if the block is not allocated (equals 0)
     if (physical_block == 0)
@@ -498,7 +505,7 @@ int INE5412_FS::handle_indirect_block(fs_inode &inode, int block_rel)
         }
 
         // Update the indirect block with the allocated physical block number
-        indirect_block.pointers[block_rel - POINTERS_PER_INODE] = physical_block;
+        indirect_block.pointers[relativeblock - POINTERS_PER_INODE] = physical_block;
         disk->write(inode.indirect, indirect_block.data);
     }
 
